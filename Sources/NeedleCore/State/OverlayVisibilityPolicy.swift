@@ -48,3 +48,38 @@ public enum OverlayVisibilityPolicy {
         )
     }
 }
+
+public enum KeepAwakeMode: Sendable, Equatable {
+    case systemDefault
+    case minutes(Int)
+    case whilePlaying
+
+    public var timeoutSeconds: TimeInterval? {
+        switch self {
+        case .systemDefault: return 0
+        case .minutes(let m): return TimeInterval(max(1, m) * 60)
+        case .whilePlaying: return nil
+        }
+    }
+}
+
+public enum DisplayAwakePolicy {
+    public static func shouldKeepDisplayAwake(
+        mode: KeepAwakeMode,
+        isShowingLockOverlay: Bool,
+        elapsedLockedSeconds: TimeInterval,
+        isOnACPower: Bool,
+        onlyOnACPower: Bool
+    ) -> Bool {
+        guard isShowingLockOverlay else { return false }
+        if onlyOnACPower && !isOnACPower { return false }
+        switch mode {
+        case .systemDefault:
+            return false
+        case .minutes(let m):
+            return elapsedLockedSeconds < TimeInterval(max(1, m) * 60)
+        case .whilePlaying:
+            return true
+        }
+    }
+}

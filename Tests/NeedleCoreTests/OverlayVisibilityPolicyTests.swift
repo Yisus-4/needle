@@ -85,4 +85,46 @@ func registerOverlayVisibilityPolicyTests(_ runner: TestRunner) {
         let httpSnap = SpotifyOutputParser.parse(delimitedOutput: httpRaw, sampledAt: 1.0)
         try expect(httpSnap.track?.artworkURL == nil, "non-https artwork URL must be rejected")
     }
+
+    runner.add("OverlayVisibilityPolicyTests", "displayAwakePolicyRespectsTimeoutACPowerAndOverlayState") {
+        try expect(!DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: .systemDefault,
+            isShowingLockOverlay: true,
+            elapsedLockedSeconds: 10,
+            isOnACPower: true,
+            onlyOnACPower: false
+        ), "systemDefault never holds assertion")
+
+        try expect(DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: .minutes(5),
+            isShowingLockOverlay: true,
+            elapsedLockedSeconds: 299,
+            isOnACPower: false,
+            onlyOnACPower: false
+        ), "within 5m timeout keeps display awake")
+
+        try expect(!DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: .minutes(5),
+            isShowingLockOverlay: true,
+            elapsedLockedSeconds: 301,
+            isOnACPower: true,
+            onlyOnACPower: false
+        ), "past 5m timeout releases assertion")
+
+        try expect(!DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: .whilePlaying,
+            isShowingLockOverlay: true,
+            elapsedLockedSeconds: 1000,
+            isOnACPower: false,
+            onlyOnACPower: true
+        ), "onlyOnACPower blocks assertion on battery")
+
+        try expect(!DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: .whilePlaying,
+            isShowingLockOverlay: false,
+            elapsedLockedSeconds: 5,
+            isOnACPower: true,
+            onlyOnACPower: false
+        ), "never holds assertion when lock overlay is not showing")
+    }
 }

@@ -11,6 +11,7 @@ final class LockScreenCoordinator {
     private let lyricsClient: LRCLIBClient
     private let lockMonitor = LockAndSleepMonitor()
     private let skyLight: SkyLightBridge?
+    private let displayAwake = DisplayAwakeManager()
     private let viewModel = OverlayViewModel()
 
     private var inputs = OverlayInputs(
@@ -26,9 +27,19 @@ final class LockScreenCoordinator {
     private var pollTask: Task<Void, Never>?
     private var trackFetchTask: Task<Void, Never>?
     private var screenObserver: NSObjectProtocol?
+    private var willSleepObserver: NSObjectProtocol?
     private var artworkCache: [String: (image: NSImage, palette: AlbumPalette)] = [:]
     private var loadedTrackID: String?
     private var playbackRefreshGeneration: UInt64 = 0
+    private var lockedAtUptime: TimeInterval?
+
+    var keepAwakeMode: KeepAwakeMode = .minutes(5) {
+        didSet { applyPolicy() }
+    }
+
+    var keepAwakeOnlyOnAC: Bool = false {
+        didSet { applyPolicy() }
+    }
 
     var isEnabled: Bool {
         get { inputs.isEnabled }
@@ -58,10 +69,22 @@ final class LockScreenCoordinator {
             }
         }
 
+        willSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                // Lid closed or manual sleep: release display assertion immediately
+                self?.displayAwake.setActive(false)
+            }
+        }
+
         lockMonitor.start(
             onLockChanged: { [weak self] locked in
                 guard let self else { return }
                 self.inputs.isScreenLocked = locked
+                self.lockedAtUptime = locked ? ProcessInfo.processInfo.systemUptime : nil
                 // Apply immediately so unlock hides overlays in zero frames even if Spotify stalls
                 self.applyPolicy()
                 if locked && !self.inputs.isDisplayAsleep {
@@ -95,10 +118,14 @@ final class LockScreenCoordinator {
     func stop() {
         pollTask?.cancel()
         trackFetchTask?.cancel()
+        displayAwake.setActive(false)
         player.stopObserving()
         lockMonitor.stop()
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
+        }
+        if let willSleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(willSleepObserver)
         }
         for win in overlayWindows { win.orderOut(nil) }
         previewWindow?.close()
@@ -255,6 +282,16 @@ final class LockScreenCoordinator {
                 win.orderOut(nil)
             }
         }
+
+        let elapsedLocked = lockedAtUptime.map { max(0, ProcessInfo.processInfo.systemUptime - $0) } ?? 0
+        let keepAwake = DisplayAwakePolicy.shouldKeepDisplayAwake(
+            mode: keepAwakeMode,
+            isShowingLockOverlay: decision.showLockScreenOverlay,
+            elapsedLockedSeconds: elapsedLocked,
+            isOnACPower: displayAwake.isOnACPower(),
+            onlyOnACPower: keepAwakeOnlyOnAC
+        )
+        displayAwake.setActive(keepAwake)
 
         if decision.shouldPollPlayer {
             startPollingIfNeeded()
