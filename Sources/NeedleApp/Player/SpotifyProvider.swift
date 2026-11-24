@@ -10,11 +10,11 @@ public final class SpotifyProvider: MediaPlayerProvider, @unchecked Sendable {
 
     private static let appleScriptSource = """
     tell application "Spotify"
-        set st to player state as string
-        if st is "stopped" then
+        set pState to player state as string
+        if pState is "stopped" then
             return "stopped"
         end if
-        set pos to player position as string
+        set pPos to player position as string
         set tId to id of current track as string
         set tName to name of current track as string
         set tArtist to artist of current track as string
@@ -22,7 +22,7 @@ public final class SpotifyProvider: MediaPlayerProvider, @unchecked Sendable {
         set tDur to duration of current track as string
         set tArt to artwork url of current track as string
         set sep to character id 31
-        return st & sep & pos & sep & tId & sep & tName & sep & tArtist & sep & tAlbum & sep & tDur & sep & tArt
+        return pState & sep & pPos & sep & tId & sep & tName & sep & tArtist & sep & tAlbum & sep & tDur & sep & tArt
     end tell
     """
 
