@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NeedleCore
 import SwiftUI
@@ -7,6 +8,7 @@ final class OverlayViewModel: ObservableObject {
     @Published var track: TrackInfo?
     @Published var syncedLyrics: SyncedLyrics?
     @Published var palette: AlbumPalette = .fallback
+    @Published var artworkImage: NSImage?
     @Published var shouldAnimate: Bool = false
     @Published var isVisible: Bool = false
 
@@ -54,17 +56,40 @@ struct ConstellationLyricsView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Option A: Full-screen dark translucent wash tinted by album art (no edge glow)
-                LinearGradient(
-                    colors: [
-                        model.palette.backdropPrimary.swiftUIColor.opacity(0.78),
-                        model.palette.backdropSecondary.swiftUIColor.opacity(0.84)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
-                .animation(.easeInOut(duration: 0.9), value: model.palette)
+                // Full-screen album cover artwork backdrop with subtle dark scrim for high-contrast Stars lyrics
+                if let artwork = model.artworkImage {
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .overlay(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.42),
+                                    Color.black.opacity(0.58),
+                                    Color.black.opacity(0.48)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .opacity(0.88)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.7), value: model.track?.id)
+                } else {
+                    LinearGradient(
+                        colors: [
+                            model.palette.backdropPrimary.swiftUIColor.opacity(0.78),
+                            model.palette.backdropSecondary.swiftUIColor.opacity(0.84)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .ignoresSafeArea()
+                    .animation(.easeInOut(duration: 0.9), value: model.palette)
+                }
 
                 if let lyrics = model.syncedLyrics {
                     TimelineView(.animation(paused: !model.shouldAnimate)) { _ in

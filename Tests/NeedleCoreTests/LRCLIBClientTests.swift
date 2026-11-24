@@ -112,6 +112,64 @@ func registerLRCLIBClientTests(_ runner: TestRunner) {
         let second = await client.fetchLyrics(for: track)
         try expectEqual(second?.lines.first?.text, "Recovered", "transient error must not poison cache")
     }
+
+    runner.add("LRCLIBClientTests", "searchFallbackMatchesTrackWith9SecondDurationDifference") {
+        let transport = MockHTTPTransport { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/api/get") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (Data(), resp)
+            }
+            let json = """
+            [
+              {"trackName":"Daisy Chain","artistName":"The Neighbourhood","albumName":"Other","duration":207.0,"syncedLyrics":"[00:13.16] Other album"},
+              {"trackName":"Daisy Chain","artistName":"The Neighbourhood","albumName":"(((((ultraSOUND)))))","duration":206.18,"syncedLyrics":"[00:13.16] Oh, oh, oh"}
+            ]
+            """.data(using: .utf8)!
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (json, resp)
+        }
+        let client = LRCLIBClient(transport: transport)
+        let track = TrackInfo(
+            id: "spotify:track:daisy",
+            name: "Daisy Chain",
+            artist: "The Neighbourhood",
+            album: "(((((ultraSOUND)))))",
+            durationSeconds: 197.84,
+            artworkURL: nil
+        )
+
+        let lyrics = await client.fetchLyrics(for: track)
+        try expectEqual(lyrics?.lines.first?.text, "Oh, oh, oh", "should match LRCLIB entry 8.3s longer")
+    }
+
+    runner.add("LRCLIBClientTests", "searchFallbackUsesGeneralQueryWhenStrictSearchEmpty") {
+        let transport = MockHTTPTransport { req in
+            let urlStr = req.url?.absoluteString ?? ""
+            if urlStr.contains("/api/get") {
+                return (Data(), HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+            }
+            if urlStr.contains("track_name=") {
+                return ("[]".data(using: .utf8)!, HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            let json = """
+            [{"trackName":"Instant Crush","artistName":"Daft Punk","albumName":"RAM","duration":337.0,"syncedLyrics":"[00:10.00] I didn't want to be the one to forget"}]
+            """.data(using: .utf8)!
+            return (json, HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let client = LRCLIBClient(transport: transport)
+        let track = TrackInfo(
+            id: "spotify:track:remaster",
+            name: "Instant Crush (feat. Julian Casablancas)",
+            artist: "Daft Punk",
+            album: "Random Access Memories",
+            durationSeconds: 337.0,
+            artworkURL: nil
+        )
+
+        let lyrics = await client.fetchLyrics(for: track)
+        try expectEqual(lyrics?.lines.first?.text, "I didn't want to be the one to forget")
+    }
 }
 
 private func expectUnwrap<T>(_ value: T?, file: String = #fileID, line: Int = #line) throws -> T {

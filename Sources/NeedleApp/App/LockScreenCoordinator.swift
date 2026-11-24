@@ -26,7 +26,7 @@ final class LockScreenCoordinator {
     private var pollTask: Task<Void, Never>?
     private var trackFetchTask: Task<Void, Never>?
     private var screenObserver: NSObjectProtocol?
-    private var paletteCache: [String: AlbumPalette] = [:]
+    private var artworkCache: [String: (image: NSImage, palette: AlbumPalette)] = [:]
     private var loadedTrackID: String?
     private var playbackRefreshGeneration: UInt64 = 0
 
@@ -194,33 +194,37 @@ final class LockScreenCoordinator {
     private func loadTrackAssets(for track: TrackInfo) {
         trackFetchTask?.cancel()
         viewModel.syncedLyrics = nil
-        if let cachedPalette = paletteCache[track.id] {
-            viewModel.palette = cachedPalette
+        if let cached = artworkCache[track.id] {
+            viewModel.artworkImage = cached.image
+            viewModel.palette = cached.palette
         } else {
+            viewModel.artworkImage = nil
             viewModel.palette = .fallback
         }
 
         let client = lyricsClient
         trackFetchTask = Task { [weak self] in
             async let lyricsResult = client.fetchLyrics(for: track)
-            async let paletteResult = Self.fetchPalette(for: track)
+            async let artworkResult = Self.fetchArtworkAndPalette(for: track)
 
-            let (lyrics, palette) = await (lyricsResult, paletteResult)
+            let (lyrics, artData) = await (lyricsResult, artworkResult)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.loadedTrackID == track.id else { return }
                 self.viewModel.syncedLyrics = lyrics
-                if let palette {
-                    self.paletteCache[track.id] = palette
-                    self.viewModel.palette = palette
-                } else if self.paletteCache[track.id] == nil {
+                if let artData, let image = NSImage(data: artData.data) {
+                    self.artworkCache[track.id] = (image, artData.palette)
+                    self.viewModel.artworkImage = image
+                    self.viewModel.palette = artData.palette
+                } else if self.artworkCache[track.id] == nil {
+                    self.viewModel.artworkImage = nil
                     self.viewModel.palette = .fallback
                 }
             }
         }
     }
 
-    private static func fetchPalette(for track: TrackInfo) async -> AlbumPalette? {
+    private nonisolated static func fetchArtworkAndPalette(for track: TrackInfo) async -> (data: Data, palette: AlbumPalette)? {
         guard let url = track.artworkURL, url.scheme?.lowercased() == "https" else { return nil }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
@@ -229,7 +233,8 @@ final class LockScreenCoordinator {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 return nil
             }
-            return PaletteExtractor.extract(from: data)
+            let palette = PaletteExtractor.extract(from: data)
+            return (data, palette)
         } catch {
             return nil
         }
