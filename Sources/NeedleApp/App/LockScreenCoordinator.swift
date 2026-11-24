@@ -121,8 +121,13 @@ final class LockScreenCoordinator {
         win.title = "Needle — Vista previa (Esc para cerrar)"
         win.titlebarAppearsTransparent = true
         win.isReleasedWhenClosed = false
+        win.collectionBehavior = [.moveToActiveSpace]
+        win.contentViewController = NSHostingController(
+            rootView: ConstellationLyricsView(model: viewModel)
+                .frame(minWidth: 720, idealWidth: 960, minHeight: 450, idealHeight: 600)
+        )
+        win.setContentSize(NSSize(width: 960, height: 600))
         win.center()
-        win.contentViewController = NSHostingController(rootView: ConstellationLyricsView(model: viewModel))
         win.onClose = { [weak self] in
             Task { @MainActor in
                 self?.previewWindow = nil
@@ -133,6 +138,7 @@ final class LockScreenCoordinator {
 
         previewWindow = win
         inputs.isPreviewOpen = true
+        applyPolicy()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
