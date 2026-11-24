@@ -52,4 +52,14 @@ func registerConstellationLayoutTests(_ runner: TestRunner) {
             try expect(node.baseFontSize >= ConstellationLayout.minFontSize, "font size below readable floor")
         }
     }
+
+    runner.add("ConstellationLayoutTests", "nodesStayInsideSafeBandEvenWithActiveWordOffsetAndScale") {
+        let line = LRCParser.parse("[00:10.00] needle find the Let Turn low down the lights tonight", trackDuration: 60).lines[0]
+        let h = 600.0 // smallest preview height
+        let nodes = ConstellationLayout.generate(for: line, seed: 42, canvasWidth: 960, canvasHeight: h)
+        for node in nodes {
+            let activeBottomY = node.y * h + ConstellationLayout.activeLabelOffsetY + (ConstellationLayout.maxFontSize * 0.65)
+            try expect(activeBottomY <= h * 0.75, "active label bottom \(activeBottomY) intruded past safe zone \(h * 0.75)")
+        }
+    }
 }

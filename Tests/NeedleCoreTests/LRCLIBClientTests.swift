@@ -87,6 +87,31 @@ func registerLRCLIBClientTests(_ runner: TestRunner) {
         let lyrics = await client.fetchLyrics(for: track)
         try expect(lyrics == nil, "offline should return nil gracefully")
     }
+
+    runner.add("LRCLIBClientTests", "transientNetworkErrorIsNotCachedAsMiss") {
+        actor Counter {
+            var calls = 0
+            func next() -> Int { calls += 1; return calls }
+        }
+        let counter = Counter()
+        let transport = MockHTTPTransport { req in
+            let n = await counter.next()
+            if n <= 2 {
+                throw URLError(.notConnectedToInternet)
+            }
+            let body = #"{"syncedLyrics":"[00:01.00] Recovered"}"#.data(using: .utf8)!
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (body, resp)
+        }
+        let client = LRCLIBClient(transport: transport)
+        let track = TrackInfo(id: "spotify:track:retry", name: "Retry", artist: "Artist", album: "Album", durationSeconds: 180, artworkURL: nil)
+
+        let first = await client.fetchLyrics(for: track)
+        try expect(first == nil, "offline attempt returns nil")
+
+        let second = await client.fetchLyrics(for: track)
+        try expectEqual(second?.lines.first?.text, "Recovered", "transient error must not poison cache")
+    }
 }
 
 private func expectUnwrap<T>(_ value: T?, file: String = #fileID, line: Int = #line) throws -> T {

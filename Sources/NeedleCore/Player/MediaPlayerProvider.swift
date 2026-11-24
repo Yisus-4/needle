@@ -36,7 +36,15 @@ public enum SpotifyOutputParser {
         let durRaw = parts[6].replacingOccurrences(of: ",", with: ".")
         let durationMs = Double(durRaw) ?? 0
         let durationSeconds = durationMs > 1000 ? durationMs / 1000.0 : durationMs
-        let artworkURL = URL(string: parts[7].trimmingCharacters(in: .whitespacesAndNewlines))
+        let artRaw = parts[7].trimmingCharacters(in: .whitespacesAndNewlines)
+        let artworkURL: URL?
+        if artRaw.isEmpty || artRaw.caseInsensitiveCompare("missing value") == .orderedSame {
+            artworkURL = nil
+        } else if let parsed = URL(string: artRaw), parsed.scheme?.lowercased() == "https" {
+            artworkURL = parsed
+        } else {
+            artworkURL = nil
+        }
 
         guard !trackID.isEmpty, !name.isEmpty else {
             return PlaybackSnapshot(state: state, positionSeconds: positionSeconds, track: nil, sampledAt: sampledAt)

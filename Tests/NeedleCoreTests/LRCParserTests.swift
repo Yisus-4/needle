@@ -38,4 +38,27 @@ func registerLRCParserTests(_ runner: TestRunner) {
         try expect(lyrics.activeLine(at: 25.0) == nil, "no active line during instrumental gap")
         try expectEqual(lyrics.activeLine(at: 40.5)?.line.text, "After solo")
     }
+
+    runner.add("LRCParserTests", "enhancedLRCBlankMarkerIsSkippedAndLeadingTextPreserved") {
+        let raw = """
+        [00:05.00] First <00:05.40> second
+        [00:14.00] <00:14.00>
+        [00:20.00] Third
+        """
+        let lyrics = LRCParser.parse(raw, trackDuration: 60)
+        try expectEqual(lyrics.lines.count, 2, "blank enhanced marker must be skipped")
+        try expectEqual(lyrics.lines[0].words.map(\.text), ["First", "second"])
+        try expectEqual(lyrics.lines[1].text, "Third")
+    }
+
+    runner.add("LRCParserTests", "rapidConsecutiveLinesDoNotOverlap") {
+        let raw = """
+        [00:10.00] QuickA
+        [00:10.15] QuickB
+        """
+        let lyrics = LRCParser.parse(raw, trackDuration: 60)
+        try expectEqual(lyrics.lines.count, 2)
+        try expect(lyrics.lines[0].endTime <= lyrics.lines[1].startTime + 0.0001, "lines must not overlap")
+        try expectEqual(lyrics.activeLine(at: 10.16)?.line.text, "QuickB")
+    }
 }

@@ -10,6 +10,12 @@ public enum LRCParser {
         let body: String
     }
 
+    private enum EnhancedParseResult {
+        case notEnhanced
+        case emptyMarker
+        case words([WordTiming])
+    }
+
     public static func parse(_ raw: String, trackDuration: TimeInterval? = nil) -> SyncedLyrics {
         let lineTagRegex = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]"#)
         let wordTagRegex = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?>"#)
@@ -42,7 +48,8 @@ public enum LRCParser {
             guard !event.body.isEmpty else { continue }
 
             let nextEventTime: TimeInterval
-            if idx + 1 < events.count {
+            let hasNextEvent = (idx + 1 < events.count)
+            if hasNextEvent {
                 nextEventTime = events[idx + 1].time
             } else if let trackDuration, trackDuration > event.time {
                 nextEventTime = trackDuration
@@ -50,19 +57,23 @@ public enum LRCParser {
                 nextEventTime = event.time + defaultTailDuration
             }
 
-            let available = max(0.3, nextEventTime - event.time)
-            let enhancedWords = parseEnhancedWords(
-                body: event.body,
-                lineStart: event.time,
-                lineLimit: event.time + available,
-                regex: wordTagRegex
-            )
+            let rawGap = nextEventTime - event.time
+            if hasNextEvent && rawGap <= 0.001 {
+                continue
+            }
+            let available = max(0.05, rawGap)
+            let lineLimit = event.time + available
 
-            if let enhancedWords, !enhancedWords.isEmpty {
+            switch parseEnhancedWords(body: event.body, lineStart: event.time, lineLimit: lineLimit, regex: wordTagRegex) {
+            case .emptyMarker:
+                continue
+            case .words(let enhancedWords):
                 let cleanText = enhancedWords.map(\.text).joined(separator: " ")
-                let endTime = max(enhancedWords.last!.endTime, event.time + 0.3)
+                let endTime = min(lineLimit, max(enhancedWords.last!.endTime, event.time + min(0.3, available)))
                 parsedLines.append(LyricLine(startTime: event.time, endTime: endTime, text: cleanText, words: enhancedWords))
                 continue
+            case .notEnhanced:
+                break
             }
 
             let tokens = event.body
@@ -71,7 +82,7 @@ public enum LRCParser {
             guard !tokens.isEmpty else { continue }
 
             let cappedWindow = min(available, Double(tokens.count) * maxSecondsPerWord, maxLineWindow)
-            let window = max(0.3, cappedWindow)
+            let window = hasNextEvent ? min(available, max(0.05, cappedWindow)) : max(0.3, cappedWindow)
             let weights = tokens.map { Double(max($0.count, 2)) }
             let totalWeight = weights.reduce(0, +)
 
@@ -100,12 +111,22 @@ public enum LRCParser {
         lineStart: TimeInterval,
         lineLimit: TimeInterval,
         regex: NSRegularExpression
-    ) -> [WordTiming]? {
+    ) -> EnhancedParseResult {
         let nsBody = body as NSString
         let matches = regex.matches(in: body, range: NSRange(location: 0, length: nsBody.length))
-        guard !matches.isEmpty else { return nil }
+        guard !matches.isEmpty else { return .notEnhanced }
 
         var rawWords: [(time: TimeInterval, text: String)] = []
+
+        // Preserve any leading words appearing before the first <mm:ss.xx> tag
+        if matches[0].range.location > 0 {
+            let leading = nsBody.substring(with: NSRange(location: 0, length: matches[0].range.location))
+                .trimmingCharacters(in: .whitespaces)
+            for token in leading.split(whereSeparator: { $0.isWhitespace }) {
+                rawWords.append((time: lineStart, text: String(token)))
+            }
+        }
+
         for i in matches.indices {
             let match = matches[i]
             guard let t = extractTimestamp(from: nsBody, match: match) else { continue }
@@ -118,16 +139,16 @@ public enum LRCParser {
             }
         }
 
-        guard !rawWords.isEmpty else { return nil }
+        guard !rawWords.isEmpty else { return .emptyMarker }
 
         var result: [WordTiming] = []
         for i in rawWords.indices {
-            let start = rawWords[i].time
-            let nextStart = (i + 1 < rawWords.count) ? rawWords[i + 1].time : min(lineLimit, start + maxSecondsPerWord)
-            let end = max(start + 0.12, min(nextStart, start + maxSecondsPerWord * 1.5))
+            let start = min(rawWords[i].time, lineLimit)
+            let nextStart = (i + 1 < rawWords.count) ? min(rawWords[i + 1].time, lineLimit) : min(lineLimit, start + maxSecondsPerWord)
+            let end = min(lineLimit, max(start + 0.05, min(nextStart, start + maxSecondsPerWord * 1.5)))
             result.append(WordTiming(text: rawWords[i].text, startTime: start, endTime: end))
         }
-        return result
+        return .words(result)
     }
 
     private static func extractTimestamp(from string: NSString, match: NSTextCheckingResult) -> TimeInterval? {

@@ -5,15 +5,16 @@ import NeedleCore
 public final class SpotifyProvider: MediaPlayerProvider, @unchecked Sendable {
     public let playerName = "Spotify"
     private let lock = NSLock()
+    private let scriptQueue = DispatchQueue(label: "com.local.needle.spotify.applescript", qos: .userInitiated)
     private var observer: NSObjectProtocol?
 
     private static let appleScriptSource = """
     tell application "Spotify"
         set st to player state as string
-        set pos to player position as string
         if st is "stopped" then
             return "stopped"
         end if
+        set pos to player position as string
         set tId to id of current track as string
         set tName to name of current track as string
         set tArtist to artist of current track as string
@@ -58,17 +59,22 @@ public final class SpotifyProvider: MediaPlayerProvider, @unchecked Sendable {
             return .stopped(at: now)
         }
 
-        return await Task.detached(priority: .userInitiated) {
-            let sampleTime = ProcessInfo.processInfo.systemUptime
-            guard let script = NSAppleScript(source: Self.appleScriptSource) else {
-                return .stopped(at: sampleTime)
+        // Serialize NSAppleScript execution on a dedicated queue (OpenScripting is not thread-safe)
+        return await withCheckedContinuation { continuation in
+            scriptQueue.async {
+                guard let script = NSAppleScript(source: Self.appleScriptSource) else {
+                    continuation.resume(returning: .stopped(at: ProcessInfo.processInfo.systemUptime))
+                    return
+                }
+                var errorDict: NSDictionary?
+                let descriptor = script.executeAndReturnError(&errorDict)
+                let sampleTime = ProcessInfo.processInfo.systemUptime
+                guard errorDict == nil, let output = descriptor.stringValue else {
+                    continuation.resume(returning: .stopped(at: sampleTime))
+                    return
+                }
+                continuation.resume(returning: SpotifyOutputParser.parse(delimitedOutput: output, sampledAt: sampleTime))
             }
-            var errorDict: NSDictionary?
-            let descriptor = script.executeAndReturnError(&errorDict)
-            guard errorDict == nil, let output = descriptor.stringValue else {
-                return .stopped(at: sampleTime)
-            }
-            return SpotifyOutputParser.parse(delimitedOutput: output, sampledAt: sampleTime)
-        }.value
+        }
     }
 }

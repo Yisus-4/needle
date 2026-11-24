@@ -28,6 +28,7 @@ final class LockScreenCoordinator {
     private var screenObserver: NSObjectProtocol?
     private var paletteCache: [String: AlbumPalette] = [:]
     private var loadedTrackID: String?
+    private var playbackRefreshGeneration: UInt64 = 0
 
     var isEnabled: Bool {
         get { inputs.isEnabled }
@@ -61,8 +62,12 @@ final class LockScreenCoordinator {
             onLockChanged: { [weak self] locked in
                 guard let self else { return }
                 self.inputs.isScreenLocked = locked
-                Task { @MainActor in
-                    await self.refreshPlayback()
+                // Apply immediately so unlock hides overlays in zero frames even if Spotify stalls
+                self.applyPolicy()
+                if locked && !self.inputs.isDisplayAsleep {
+                    Task { @MainActor in
+                        await self.refreshPlayback()
+                    }
                 }
             },
             onSleepChanged: { [weak self] asleep in
@@ -157,7 +162,11 @@ final class LockScreenCoordinator {
     }
 
     private func refreshPlayback() async {
+        playbackRefreshGeneration &+= 1
+        let generation = playbackRefreshGeneration
         let snapshot = await player.fetchSnapshot()
+        guard generation == playbackRefreshGeneration else { return }
+
         inputs.playbackState = snapshot.state
         viewModel.updateClock(with: snapshot)
         viewModel.track = snapshot.track
@@ -181,6 +190,8 @@ final class LockScreenCoordinator {
         viewModel.syncedLyrics = nil
         if let cachedPalette = paletteCache[track.id] {
             viewModel.palette = cachedPalette
+        } else {
+            viewModel.palette = .fallback
         }
 
         let client = lyricsClient
@@ -196,13 +207,15 @@ final class LockScreenCoordinator {
                 if let palette {
                     self.paletteCache[track.id] = palette
                     self.viewModel.palette = palette
+                } else if self.paletteCache[track.id] == nil {
+                    self.viewModel.palette = .fallback
                 }
             }
         }
     }
 
     private static func fetchPalette(for track: TrackInfo) async -> AlbumPalette? {
-        guard let url = track.artworkURL else { return nil }
+        guard let url = track.artworkURL, url.scheme?.lowercased() == "https" else { return nil }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
         do {
@@ -223,6 +236,7 @@ final class LockScreenCoordinator {
 
         if decision.showLockScreenOverlay {
             for win in overlayWindows {
+                skyLight?.attach(window: win)
                 win.orderFrontRegardless()
             }
         } else {

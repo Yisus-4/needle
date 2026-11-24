@@ -26,6 +26,12 @@ public actor LRCLIBClient {
         case miss
     }
 
+    private enum FetchOutcome {
+        case found(SyncedLyrics)
+        case notFound
+        case transientError
+    }
+
     private struct LRCLIBRecord: Decodable {
         let duration: Double?
         let syncedLyrics: String?
@@ -49,21 +55,32 @@ public actor LRCLIBClient {
             }
         }
 
-        if let exact = await fetchExact(track: track) {
-            cache[track.id] = .hit(exact)
-            return exact
+        let exact = await fetchExact(track: track)
+        switch exact {
+        case .found(let lyrics):
+            cache[track.id] = .hit(lyrics)
+            return lyrics
+        case .notFound, .transientError:
+            break
         }
 
-        if let searched = await fetchViaSearch(track: track) {
-            cache[track.id] = .hit(searched)
-            return searched
+        let searched = await fetchViaSearch(track: track)
+        switch searched {
+        case .found(let lyrics):
+            cache[track.id] = .hit(lyrics)
+            return lyrics
+        case .notFound:
+            // Only cache definitive misses, never transient network/cancellation errors
+            if case .notFound = exact {
+                cache[track.id] = .miss
+            }
+            return nil
+        case .transientError:
+            return nil
         }
-
-        cache[track.id] = .miss
-        return nil
     }
 
-    private func fetchExact(track: TrackInfo) async -> SyncedLyrics? {
+    private func fetchExact(track: TrackInfo) async -> FetchOutcome {
         var components = URLComponents(string: "https://lrclib.net/api/get")!
         components.queryItems = [
             URLQueryItem(name: "track_name", value: track.name),
@@ -71,7 +88,7 @@ public actor LRCLIBClient {
             URLQueryItem(name: "album_name", value: track.album),
             URLQueryItem(name: "duration", value: String(Int(track.durationSeconds.rounded())))
         ]
-        guard let url = components.url else { return nil }
+        guard let url = components.url else { return .notFound }
 
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -79,25 +96,26 @@ public actor LRCLIBClient {
 
         do {
             let (data, response) = try await transport.data(for: request)
-            guard response.statusCode == 200 else { return nil }
+            if response.statusCode == 404 { return .notFound }
+            guard response.statusCode == 200 else { return .transientError }
             let record = try JSONDecoder().decode(LRCLIBRecord.self, from: data)
             guard let raw = record.syncedLyrics, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
+                return .notFound
             }
             let parsed = LRCParser.parse(raw, trackDuration: track.durationSeconds)
-            return parsed.lines.isEmpty ? nil : parsed
+            return parsed.lines.isEmpty ? .notFound : .found(parsed)
         } catch {
-            return nil
+            return .transientError
         }
     }
 
-    private func fetchViaSearch(track: TrackInfo) async -> SyncedLyrics? {
+    private func fetchViaSearch(track: TrackInfo) async -> FetchOutcome {
         var components = URLComponents(string: "https://lrclib.net/api/search")!
         components.queryItems = [
             URLQueryItem(name: "track_name", value: track.name),
             URLQueryItem(name: "artist_name", value: track.artist)
         ]
-        guard let url = components.url else { return nil }
+        guard let url = components.url else { return .notFound }
 
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -105,7 +123,8 @@ public actor LRCLIBClient {
 
         do {
             let (data, response) = try await transport.data(for: request)
-            guard response.statusCode == 200 else { return nil }
+            if response.statusCode == 404 { return .notFound }
+            guard response.statusCode == 200 else { return .transientError }
             let records = try JSONDecoder().decode([LRCLIBRecord].self, from: data)
             let best = records
                 .compactMap { record -> (diff: Double, raw: String)? in
@@ -118,11 +137,11 @@ public actor LRCLIBClient {
                 }
                 .min(by: { $0.diff < $1.diff })
 
-            guard let best else { return nil }
+            guard let best else { return .notFound }
             let parsed = LRCParser.parse(best.raw, trackDuration: track.durationSeconds)
-            return parsed.lines.isEmpty ? nil : parsed
+            return parsed.lines.isEmpty ? .notFound : .found(parsed)
         } catch {
-            return nil
+            return .transientError
         }
     }
 }

@@ -35,6 +35,8 @@ public enum ConstellationLayout {
     public static let safeMaxY: Double = 0.72
     public static let minFontSize: Double = 15.0
     public static let maxFontSize: Double = 34.0
+    public static let activeLabelOffsetY: Double = 32.0
+    public static let inactiveLabelOffsetY: Double = 18.0
 
     private struct SplitMix64 {
         private var state: UInt64
@@ -93,20 +95,21 @@ public enum ConstellationLayout {
             let waveSign = (i % 2 == 0) ? -1.0 : 1.0
             let targetY = 0.49 + waveSign * (0.07 + rng.nextUnit() * 0.11)
 
-            let estW = Double(word.text.count) * fontSize * 0.62 + 24.0
-            let estH = fontSize * 1.6 + 22.0
-            let halfNormW = min((estW / 2.0) / w, 0.15)
-            let halfNormH = min((estH / 2.0) / h, 0.08)
+            let activeDisplaySize = min(max(fontSize * 1.42, 26.0), maxFontSize)
+            let estW = Double(word.text.count) * max(fontSize, activeDisplaySize * 0.82) * 0.62 + 24.0
+            let topExtent = 20.0
+            let bottomExtent = activeLabelOffsetY + activeDisplaySize * 0.65
+            let halfNormW = min((estW / 2.0) / w, 0.16)
 
             let clampMinX = max(safeMinX, halfNormW + 0.02)
             let clampMaxX = min(safeMaxX, 1.0 - halfNormW - 0.02)
-            let clampMinY = max(safeMinY, safeMinY + halfNormH * 0.2)
-            let clampMaxY = min(safeMaxY, safeMaxY - halfNormH * 0.2)
+            let clampMinY = max(safeMinY, safeMinY + topExtent / h)
+            let clampMaxY = min(safeMaxY, (safeMaxY * h - bottomExtent) / h)
 
             func makeRect(nx: Double, ny: Double) -> Rect {
                 let cx = nx * w
                 let cy = ny * h
-                return Rect(minX: cx - estW / 2, maxX: cx + estW / 2, minY: cy - estH / 2, maxY: cy + estH / 2)
+                return Rect(minX: cx - estW / 2, maxX: cx + estW / 2, minY: cy - topExtent, maxY: cy + bottomExtent)
             }
 
             var chosenX = min(max(targetX, clampMinX), clampMaxX)

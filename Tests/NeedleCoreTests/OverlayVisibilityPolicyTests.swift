@@ -74,4 +74,15 @@ func registerOverlayVisibilityPolicyTests(_ runner: TestRunner) {
         try expectClose(snap.track?.durationSeconds ?? 0, 214.0, accuracy: 0.001)
         try expectEqual(snap.track?.artworkURL?.absoluteString, "https://i.scdn.co/image/abc")
     }
+
+    runner.add("OverlayVisibilityPolicyTests", "spotifyOutputParserRejectsMissingValueAndNonHTTPSArtworkURL") {
+        let sep = "\u{1F}"
+        let missingRaw = ["playing", "10.0", "id1", "Song", "Art", "Alb", "180000", "missing value"].joined(separator: sep)
+        let missingSnap = SpotifyOutputParser.parse(delimitedOutput: missingRaw, sampledAt: 1.0)
+        try expect(missingSnap.track?.artworkURL == nil, "missing value must parse as nil")
+
+        let httpRaw = ["playing", "10.0", "id2", "Song", "Art", "Alb", "180000", "http://insecure.example/cover.jpg"].joined(separator: sep)
+        let httpSnap = SpotifyOutputParser.parse(delimitedOutput: httpRaw, sampledAt: 1.0)
+        try expect(httpSnap.track?.artworkURL == nil, "non-https artwork URL must be rejected")
+    }
 }

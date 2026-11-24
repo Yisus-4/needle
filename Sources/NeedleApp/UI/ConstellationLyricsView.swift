@@ -11,6 +11,8 @@ final class OverlayViewModel: ObservableObject {
     @Published var isVisible: Bool = false
 
     private var clock = PlaybackClock()
+    private var cachedLayoutKey: String?
+    private var cachedNodes: [ConstellationNode] = []
 
     func updateClock(with snapshot: PlaybackSnapshot) {
         clock.sync(with: snapshot)
@@ -18,6 +20,25 @@ final class OverlayViewModel: ObservableObject {
 
     func currentPlaybackPosition() -> TimeInterval {
         clock.currentPosition(at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    func nodes(for line: LyricLine, lineIndex: Int, canvasSize: CGSize) -> [ConstellationNode] {
+        let trackID = track?.id ?? ""
+        let key = "\(trackID)-\(lineIndex)-\(Int(canvasSize.width.rounded()))x\(Int(canvasSize.height.rounded()))"
+        if cachedLayoutKey == key {
+            return cachedNodes
+        }
+        let trackHash = UInt64(bitPattern: Int64(trackID.hashValue))
+        let seed = trackHash ^ UInt64(lineIndex &+ 1) &* 0x9E3779B97F4A7C15
+        let generated = ConstellationLayout.generate(
+            for: line,
+            seed: seed,
+            canvasWidth: Double(canvasSize.width),
+            canvasHeight: Double(canvasSize.height)
+        )
+        cachedLayoutKey = key
+        cachedNodes = generated
+        return generated
     }
 }
 
@@ -75,88 +96,87 @@ struct ConstellationLyricsView: View {
     @ViewBuilder
     private func constellationStage(lyrics: SyncedLyrics, size: CGSize) -> some View {
         let now = model.currentPlaybackPosition()
-        if let active = lyrics.activeLine(at: now) {
-            let trackHash = UInt64(bitPattern: Int64(model.track?.id.hashValue ?? 0))
-            let seed = trackHash ^ UInt64(active.index &+ 1) &* 0x9E3779B97F4A7C15
-            let nodes = ConstellationLayout.generate(
-                for: active.line,
-                seed: seed,
-                canvasWidth: Double(size.width),
-                canvasHeight: Double(size.height)
-            )
-            let revealedCount = max(1, nodes.filter { now >= $0.startTime }.count)
-            let activeWordIndex = min(revealedCount - 1, nodes.count - 1)
-            let accentColor = model.palette.accent.swiftUIColor
+        let active = lyrics.activeLine(at: now)
 
-            ZStack {
-                // Luminous lines + 4-point sparkle stars + active circular target halo
-                Canvas { ctx, canvasSize in
-                    let points = nodes.prefix(revealedCount).map { node in
-                        CGPoint(x: node.x * canvasSize.width, y: node.y * canvasSize.height)
-                    }
+        ZStack {
+            if let active {
+                let nodes = model.nodes(for: active.line, lineIndex: active.index, canvasSize: size)
+                let revealedCount = max(1, nodes.filter { now >= $0.startTime }.count)
+                let activeWordIndex = min(revealedCount - 1, nodes.count - 1)
+                let accentColor = model.palette.accent.swiftUIColor
 
-                    // Connecting lines
-                    if points.count >= 2 {
-                        for i in 1..<points.count {
-                            var path = Path()
-                            path.move(to: points[i - 1])
-                            path.addLine(to: points[i])
-                            let isNewest = (i == points.count - 1)
-                            ctx.stroke(
-                                path,
-                                with: .color(accentColor.opacity(isNewest ? 0.65 : 0.36)),
-                                style: StrokeStyle(lineWidth: isNewest ? 1.25 : 0.9, lineCap: .round)
-                            )
+                ZStack {
+                    // Luminous lines + 4-point sparkle stars + active circular target halo
+                    Canvas { ctx, canvasSize in
+                        let points = nodes.prefix(revealedCount).map { node in
+                            CGPoint(x: node.x * canvasSize.width, y: node.y * canvasSize.height)
+                        }
+
+                        // Connecting lines
+                        if points.count >= 2 {
+                            for i in 1..<points.count {
+                                var path = Path()
+                                path.move(to: points[i - 1])
+                                path.addLine(to: points[i])
+                                let isNewest = (i == points.count - 1)
+                                ctx.stroke(
+                                    path,
+                                    with: .color(accentColor.opacity(isNewest ? 0.65 : 0.36)),
+                                    style: StrokeStyle(lineWidth: isNewest ? 1.25 : 0.9, lineCap: .round)
+                                )
+                            }
+                        }
+
+                        // 4-point sparkle stars at each revealed node
+                        for (idx, pt) in points.enumerated() {
+                            let isActive = (idx == activeWordIndex)
+                            let starRadius: CGFloat = isActive ? 11.0 : 5.0
+                            let starPath = fourPointStarPath(center: pt, outerRadius: starRadius, innerRadius: starRadius * 0.22)
+                            ctx.fill(starPath, with: .color(.white.opacity(isActive ? 0.98 : 0.72)))
+
+                            if isActive {
+                                // Thin circular target halo ring around the active star (matching Needle Stars reference)
+                                let ringRadius: CGFloat = 19.0
+                                let ringRect = CGRect(
+                                    x: pt.x - ringRadius,
+                                    y: pt.y - ringRadius,
+                                    width: ringRadius * 2,
+                                    height: ringRadius * 2
+                                )
+                                ctx.stroke(
+                                    Path(ellipseIn: ringRect),
+                                    with: .color(accentColor.opacity(0.65)),
+                                    lineWidth: 1.0
+                                )
+                            }
                         }
                     }
 
-                    // 4-point sparkle stars at each revealed node
-                    for (idx, pt) in points.enumerated() {
+                    // Word labels anchored cleanly below each star node
+                    ForEach(Array(nodes.prefix(revealedCount).enumerated()), id: \.element.id) { idx, node in
                         let isActive = (idx == activeWordIndex)
-                        let starRadius: CGFloat = isActive ? 11.0 : 5.0
-                        let starPath = fourPointStarPath(center: pt, outerRadius: starRadius, innerRadius: starRadius * 0.22)
-                        ctx.fill(starPath, with: .color(.white.opacity(isActive ? 0.98 : 0.72)))
+                        let displaySize = isActive
+                            ? min(max(node.baseFontSize * 1.42, 26.0), ConstellationLayout.maxFontSize)
+                            : node.baseFontSize
+                        let yOffset = isActive ? ConstellationLayout.activeLabelOffsetY : ConstellationLayout.inactiveLabelOffsetY
 
-                        if isActive {
-                            // Thin circular target halo ring around the active star (matching Needle Stars reference)
-                            let ringRadius: CGFloat = 19.0
-                            let ringRect = CGRect(
-                                x: pt.x - ringRadius,
-                                y: pt.y - ringRadius,
-                                width: ringRadius * 2,
-                                height: ringRadius * 2
+                        Text(node.text)
+                            .font(.system(size: displaySize, weight: isActive ? .bold : .medium, design: .rounded))
+                            .foregroundStyle(isActive ? accentColor : Color.white.opacity(0.76))
+                            .shadow(color: isActive ? accentColor.opacity(0.55) : .black.opacity(0.6), radius: isActive ? 12 : 4, y: 2)
+                            .position(
+                                x: node.x * size.width,
+                                y: node.y * size.height + yOffset
                             )
-                            ctx.stroke(
-                                Path(ellipseIn: ringRect),
-                                with: .color(accentColor.opacity(0.65)),
-                                lineWidth: 1.0
-                            )
-                        }
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
                 }
-
-                // Word labels anchored cleanly below each star node
-                ForEach(Array(nodes.prefix(revealedCount).enumerated()), id: \.element.id) { idx, node in
-                    let isActive = (idx == activeWordIndex)
-                    let displaySize = isActive
-                        ? min(max(node.baseFontSize * 1.42, 26.0), ConstellationLayout.maxFontSize)
-                        : node.baseFontSize
-
-                    Text(node.text)
-                        .font(.system(size: displaySize, weight: isActive ? .bold : .medium, design: .rounded))
-                        .foregroundStyle(isActive ? accentColor : Color.white.opacity(0.76))
-                        .shadow(color: isActive ? accentColor.opacity(0.55) : .black.opacity(0.6), radius: isActive ? 12 : 4, y: 2)
-                        .position(
-                            x: node.x * size.width,
-                            y: node.y * size.height + (isActive ? 34 : 18)
-                        )
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
+                .id("\(model.track?.id ?? "")-\(active.index)")
+                .transition(.opacity)
+                .animation(.easeOut(duration: 0.28), value: activeWordIndex)
             }
-            .id("\(model.track?.id ?? "")-\(active.index)")
-            .transition(.opacity)
-            .animation(.easeOut(duration: 0.28), value: activeWordIndex)
         }
+        .animation(.easeInOut(duration: 0.35), value: active?.index)
     }
 
     private func fallbackTrackView(track: TrackInfo) -> some View {

@@ -42,6 +42,7 @@ final class SkyLightBridge {
 
     @MainActor
     func attach(window: NSWindow) {
+        guard window.windowNumber > 0 else { return }
         _ = addWindows(connection, space, [window.windowNumber] as CFArray, 7)
     }
 }
