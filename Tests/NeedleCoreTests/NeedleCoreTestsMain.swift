@@ -7,6 +7,7 @@ struct NeedleCoreTestsMain {
         registerLRCParserTests(runner)
         registerPlaybackClockTests(runner)
         registerLRCLIBClientTests(runner)
+        registerPaletteExtractorTests(runner)
 
         let filter = CommandLine.arguments.dropFirst().first
         let code = await runner.execute(filter: filter)
