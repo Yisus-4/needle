@@ -72,6 +72,16 @@ struct ConstellationLyricsView: View {
                     }
                 } else if let track = model.track {
                     fallbackTrackView(track: track)
+                } else {
+                    VStack(spacing: 8) {
+                        Text("Needle")
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
+                            .foregroundStyle(model.palette.accent.swiftUIColor)
+                        Text("Reproduce una canción en Spotify para ver las constelaciones")
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+                    .padding(.horizontal, 40)
                 }
 
                 // Subtle caption at bottom of safe zone (above macOS password/Touch ID)

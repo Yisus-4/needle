@@ -14,6 +14,15 @@ final class NeedleAppDelegate: NSObject, NSApplicationDelegate {
             self?.statusMenuItem?.title = text
         }
         coordinator.start()
+        // Show Preview on launch so the user gets immediate visual feedback (Esc to close; stays in menu bar)
+        coordinator.openPreviewWindow()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            coordinator.openPreviewWindow()
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
