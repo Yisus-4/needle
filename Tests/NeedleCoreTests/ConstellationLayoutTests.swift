@@ -62,4 +62,19 @@ func registerConstellationLayoutTests(_ runner: TestRunner) {
             try expect(activeBottomY <= h * 0.75, "active label bottom \(activeBottomY) intruded past safe zone \(h * 0.75)")
         }
     }
+
+    runner.add("ConstellationLayoutTests", "constellationMovesOrganicallyNotStrictlyLeftToRight") {
+        let line = LRCParser.parse("[00:10.00] When it was real it is all that I could feel", trackDuration: 60).lines[0]
+        var nonMonotonicLines = 0
+        for seed in UInt64(1)...UInt64(10) {
+            let nodes = ConstellationLayout.generate(for: line, seed: seed, canvasWidth: 1440, canvasHeight: 900)
+            let xs = nodes.map(\.x)
+            let hasLeftStep = zip(xs, xs.dropFirst()).contains { $1 < $0 }
+            let hasRightStep = zip(xs, xs.dropFirst()).contains { $1 > $0 }
+            if hasLeftStep && hasRightStep {
+                nonMonotonicLines += 1
+            }
+        }
+        try expect(nonMonotonicLines >= 8, "expected organic multi-directional movement in at least 8/10 seeds, got \(nonMonotonicLines)")
+    }
 }

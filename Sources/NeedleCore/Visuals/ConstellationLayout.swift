@@ -90,11 +90,6 @@ public enum ConstellationLayout {
             let rawSize = (15.5 + lengthFactor * 7.5 + jitter) * densityScale
             let fontSize = min(max(rawSize, minFontSize), 26.0)
 
-            let progress = count == 1 ? 0.5 : Double(i) / Double(count - 1)
-            let targetX = 0.14 + progress * 0.72
-            let waveSign = (i % 2 == 0) ? -1.0 : 1.0
-            let targetY = 0.49 + waveSign * (0.07 + rng.nextUnit() * 0.11)
-
             let activeDisplaySize = min(max(fontSize * 1.42, 26.0), maxFontSize)
             let estW = Double(word.text.count) * max(fontSize, activeDisplaySize * 0.82) * 0.62 + 24.0
             let topExtent = 20.0
@@ -112,21 +107,22 @@ public enum ConstellationLayout {
                 return Rect(minX: cx - estW / 2, maxX: cx + estW / 2, minY: cy - topExtent, maxY: cy + bottomExtent)
             }
 
-            var chosenX = min(max(targetX, clampMinX), clampMaxX)
-            var chosenY = min(max(targetY, clampMinY), clampMaxY)
+            var chosenX = clampMinX + rng.nextUnit() * (clampMaxX - clampMinX)
+            var chosenY = clampMinY + rng.nextUnit() * (clampMaxY - clampMinY)
             var chosenRect = makeRect(nx: chosenX, ny: chosenY)
 
-            if placedRects.contains(where: { $0.intersects(chosenRect) }) {
+            if let prev = nodes.last {
+                // Organic multi-directional constellation walk from previous star
                 var found = false
-                // Search progressively wider organic offsets around target first, then full safe band
-                for attempt in 0..<120 {
-                    let spreadX = attempt < 50 ? 0.14 : 0.42
-                    let spreadY = attempt < 50 ? 0.20 : 0.44
+                for attempt in 0..<140 {
                     let cx: Double
                     let cy: Double
-                    if attempt < 50 {
-                        cx = min(max(targetX + (rng.nextUnit() - 0.5) * 2.0 * spreadX, clampMinX), clampMaxX)
-                        cy = min(max(0.49 + (rng.nextUnit() - 0.5) * 2.0 * spreadY, clampMinY), clampMaxY)
+                    if attempt < 80 {
+                        let angle = rng.nextUnit() * 2.0 * Double.pi
+                        let distX = 0.14 + rng.nextUnit() * 0.18
+                        let distY = 0.09 + rng.nextUnit() * 0.15
+                        cx = min(max(prev.x + cos(angle) * distX, clampMinX), clampMaxX)
+                        cy = min(max(prev.y + sin(angle) * distY, clampMinY), clampMaxY)
                     } else {
                         cx = clampMinX + rng.nextUnit() * (clampMaxX - clampMinX)
                         cy = clampMinY + rng.nextUnit() * (clampMaxY - clampMinY)
@@ -141,7 +137,6 @@ public enum ConstellationLayout {
                     }
                 }
                 if !found {
-                    // Deterministic grid fallback inside safe zone
                     outer: for row in 0..<5 {
                         for col in 0..<8 {
                             let gx = clampMinX + (Double(col) / 7.0) * (clampMaxX - clampMinX)
