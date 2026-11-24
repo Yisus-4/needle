@@ -87,7 +87,9 @@ struct NeedleAppEntry {
             app.setActivationPolicy(.accessory)
             let delegate = NeedleAppDelegate()
             app.delegate = delegate
-            app.run()
+            withExtendedLifetime(delegate) {
+                app.run()
+            }
         }
     }
 }
