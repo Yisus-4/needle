@@ -3,3 +3,7 @@ build/
 .swiftpm/
 .DS_Store
 .superpowers/
+windows/**/bin/
+windows/**/obj/
+windows/dist/
+*.user
