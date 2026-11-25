@@ -18,12 +18,21 @@
             </Rectangle.Fill>
         </Rectangle>
 
-        <!-- Full-bleed album cover artwork backdrop -->
+        <!-- Full-bleed album cover artwork backdrop (high-quality Fant scaling + subtle Gaussian blur to eliminate low-res SMTC thumbnail pixelation) -->
         <Image x:Name="ArtworkImage"
                Stretch="UniformToFill"
                HorizontalAlignment="Center"
                VerticalAlignment="Center"
-               Opacity="0" />
+               RenderOptions.BitmapScalingMode="HighQuality"
+               RenderTransformOrigin="0.5,0.5"
+               Opacity="0">
+            <Image.RenderTransform>
+                <ScaleTransform ScaleX="1.06" ScaleY="1.06" />
+            </Image.RenderTransform>
+            <Image.Effect>
+                <BlurEffect Radius="18" KernelType="Gaussian" RenderingBias="Quality" />
+            </Image.Effect>
+        </Image>
 
         <!-- Subtle dark scrim so Stars constellation remains crisp and high-contrast (no edge glow) -->
         <Rectangle x:Name="ScrimOverlay" IsHitTestVisible="False">
