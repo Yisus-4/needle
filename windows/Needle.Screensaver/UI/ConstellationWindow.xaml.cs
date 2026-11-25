@@ -16,6 +16,34 @@ namespace Needle.Screensaver.UI;
 
 public partial class ConstellationWindow : Window
 {
+    private const double WordRevealDuration = 0.28;
+    private const double WordSettleDuration = 0.28;
+    private const double LineFadeOutDuration = 0.30;
+
+    private sealed class NodeVisual
+    {
+        public required ConstellationNode Node { get; init; }
+        public required double CenterX { get; init; }
+        public required double CenterY { get; init; }
+        public required double PrevX { get; init; }
+        public required double PrevY { get; init; }
+        public required double InactiveScale { get; init; }
+        public required double LabelHalfHeight { get; init; }
+        public required double ActiveOffsetY { get; init; }
+        public required double InactiveOffsetY { get; init; }
+
+        public Line? IncomingLine { get; init; }
+        public SolidColorBrush? LineBrush { get; init; }
+        public required Polygon Star { get; init; }
+        public required ScaleTransform StarScale { get; init; }
+        public required Ellipse HaloRing { get; init; }
+        public required ScaleTransform HaloScale { get; init; }
+        public required TextBlock Label { get; init; }
+        public required ScaleTransform LabelScale { get; init; }
+        public required SolidColorBrush LabelBrush { get; init; }
+        public required DropShadowEffect LabelShadow { get; init; }
+    }
+
     private readonly bool _exitOnInput;
     private readonly nint _previewParentHwnd;
     private readonly System.Drawing.Rectangle? _targetPhysicalBounds;
@@ -29,10 +57,10 @@ public partial class ConstellationWindow : Window
 
     private string? _cachedTrackId;
     private int _cachedLineIndex = -1;
-    private int _cachedRevealedCount = -1;
     private double _cachedWidth;
     private double _cachedHeight;
-    private IReadOnlyList<ConstellationNode> _cachedNodes = [];
+    private AlbumPalette _cachedPalette = AlbumPalette.Fallback;
+    private readonly List<NodeVisual> _nodeVisuals = [];
 
     public event Action? ExitRequested;
 
@@ -167,9 +195,6 @@ public partial class ConstellationWindow : Window
             FallbackTitle.Foreground = new SolidColorBrush(ToWpfColor(AlbumPalette.Fallback.Accent));
             FallbackArtist.Text = "Reproduce una canción en Spotify para ver las constelaciones";
         }
-
-        // Force visual refresh on state update
-        _cachedRevealedCount = -1;
     }
 
     private void OnRenderFrame(object? sender, EventArgs e)
@@ -181,11 +206,9 @@ public partial class ConstellationWindow : Window
         bool hasLyrics = _syncedLyrics is not null && _snapshot?.State == PlaybackState.Playing;
         if (!hasLyrics)
         {
-            StarsCanvas.Children.Clear();
+            ClearLineVisuals();
             FallbackPanel.Visibility = Visibility.Visible;
             TrackCaption.Visibility = Visibility.Collapsed;
-            _cachedLineIndex = -1;
-            _cachedRevealedCount = -1;
             return;
         }
 
@@ -196,12 +219,7 @@ public partial class ConstellationWindow : Window
         var active = _syncedLyrics!.ActiveLine(now);
         if (active is null)
         {
-            if (StarsCanvas.Children.Count > 0)
-            {
-                StarsCanvas.Children.Clear();
-                _cachedLineIndex = -1;
-                _cachedRevealedCount = -1;
-            }
+            ClearLineVisuals();
             return;
         }
 
@@ -209,117 +227,250 @@ public partial class ConstellationWindow : Window
         bool layoutChanged = trackId != _cachedTrackId ||
                              active.Value.Index != _cachedLineIndex ||
                              Math.Abs(width - _cachedWidth) > 1.0 ||
-                             Math.Abs(height - _cachedHeight) > 1.0;
+                             Math.Abs(height - _cachedHeight) > 1.0 ||
+                             _palette != _cachedPalette;
 
         if (layoutChanged)
         {
             ulong trackHash = ComputeStableHash(trackId);
             ulong seed = trackHash ^ ((ulong)(active.Value.Index + 1) * 0x9E3779B97F4A7C15UL);
-            _cachedNodes = ConstellationLayout.Generate(active.Value.Line, seed, width, height);
+            var nodes = ConstellationLayout.Generate(active.Value.Line, seed, width, height);
+            RebuildLineVisuals(nodes, width, height);
             _cachedTrackId = trackId;
             _cachedLineIndex = active.Value.Index;
             _cachedWidth = width;
             _cachedHeight = height;
-            _cachedRevealedCount = -1;
+            _cachedPalette = _palette;
         }
 
-        int revealed = Math.Max(1, _cachedNodes.Count(n => now >= n.StartTime));
-        if (revealed == _cachedRevealedCount) return;
-        _cachedRevealedCount = revealed;
-
-        DrawConstellation(revealed, width, height);
+        AnimateConstellation(active.Value.Line, now);
     }
 
-    private void DrawConstellation(int revealedCount, double width, double height)
+    private void ClearLineVisuals()
+    {
+        if (_nodeVisuals.Count > 0 || StarsCanvas.Children.Count > 0)
+        {
+            StarsCanvas.Children.Clear();
+            _nodeVisuals.Clear();
+            _cachedLineIndex = -1;
+        }
+        StarsCanvas.Opacity = 1.0;
+    }
+
+    private void RebuildLineVisuals(IReadOnlyList<ConstellationNode> nodes, double width, double height)
     {
         StarsCanvas.Children.Clear();
-        int count = Math.Min(revealedCount, _cachedNodes.Count);
-        if (count == 0) return;
+        _nodeVisuals.Clear();
+        if (nodes.Count == 0) return;
 
-        int activeIdx = count - 1;
         var accent = ToWpfColor(_palette.Accent);
         double previewScale = width < 400 ? Math.Max(0.32, width / 1100.0) : 1.0;
 
-        // 1. Connecting lines
-        for (int i = 1; i < count; i++)
+        // First pass: create connecting lines behind stars & labels
+        var lines = new (Line? Line, SolidColorBrush? Brush)[nodes.Count];
+        for (int i = 1; i < nodes.Count; i++)
         {
-            var prev = _cachedNodes[i - 1];
-            var curr = _cachedNodes[i];
-            bool isNewest = i == activeIdx;
-
+            var prev = nodes[i - 1];
+            double px = prev.X * width;
+            double py = prev.Y * height;
+            var lineBrush = new SolidColorBrush(accent);
             var line = new Line
             {
-                X1 = prev.X * width,
-                Y1 = prev.Y * height,
-                X2 = curr.X * width,
-                Y2 = curr.Y * height,
-                Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-                    (byte)(isNewest ? 170 : 95), accent.R, accent.G, accent.B)),
-                StrokeThickness = (isNewest ? 1.3 : 0.9) * previewScale,
+                X1 = px,
+                Y1 = py,
+                X2 = px,
+                Y2 = py,
+                Stroke = lineBrush,
+                StrokeThickness = 1.15 * previewScale,
                 StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round
+                StrokeEndLineCap = PenLineCap.Round,
+                Opacity = 0.0
             };
             StarsCanvas.Children.Add(line);
+            lines[i] = (line, lineBrush);
         }
 
-        // 2. 4-point sparkle stars, active halo ring, and variable-size word labels
-        for (int i = 0; i < count; i++)
+        // Second pass: create stars, halo rings, and word labels (all reused smoothly every frame)
+        for (int i = 0; i < nodes.Count; i++)
         {
-            var node = _cachedNodes[i];
-            bool isActive = i == activeIdx;
+            var node = nodes[i];
             double cx = node.X * width;
             double cy = node.Y * height;
+            double prevX = i > 0 ? nodes[i - 1].X * width : cx;
+            double prevY = i > 0 ? nodes[i - 1].Y * height : cy;
 
-            double starR = (isActive ? 11.0 : 5.0) * previewScale;
+            double starR = 11.0 * previewScale;
+            var starScale = new ScaleTransform(0.5, 0.5, cx, cy);
             var star = BuildFourPointStar(cx, cy, starR, starR * 0.22);
-            star.Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-                (byte)(isActive ? 250 : 185), 255, 255, 255));
+            star.Fill = new SolidColorBrush(Colors.White);
+            star.RenderTransform = starScale;
+            star.Opacity = 0.0;
             StarsCanvas.Children.Add(star);
 
-            if (isActive)
+            double ringR = 19.0 * previewScale;
+            var haloScale = new ScaleTransform(0.8, 0.8, ringR, ringR);
+            var halo = new Ellipse
             {
-                double ringR = 19.0 * previewScale;
-                var ring = new Ellipse
-                {
-                    Width = ringR * 2,
-                    Height = ringR * 2,
-                    Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(170, accent.R, accent.G, accent.B)),
-                    StrokeThickness = 1.0 * previewScale
-                };
-                Canvas.SetLeft(ring, cx - ringR);
-                Canvas.SetTop(ring, cy - ringR);
-                StarsCanvas.Children.Add(ring);
-            }
+                Width = ringR * 2,
+                Height = ringR * 2,
+                Stroke = new SolidColorBrush(accent),
+                StrokeThickness = 1.0 * previewScale,
+                RenderTransform = haloScale,
+                Opacity = 0.0
+            };
+            Canvas.SetLeft(halo, cx - ringR);
+            Canvas.SetTop(halo, cy - ringR);
+            StarsCanvas.Children.Add(halo);
 
-            double fontSize = isActive
-                ? Math.Clamp(node.BaseFontSize * 1.42, 26.0, ConstellationLayout.MaxFontSize) * previewScale
-                : node.BaseFontSize * previewScale;
+            double activeFontSize = Math.Clamp(node.BaseFontSize * 1.42, 26.0, ConstellationLayout.MaxFontSize) * previewScale;
+            double inactiveFontSize = node.BaseFontSize * previewScale;
+            double inactiveScale = activeFontSize > 0.01 ? inactiveFontSize / activeFontSize : 0.75;
 
+            var labelBrush = new SolidColorBrush(accent);
+            var labelShadow = new DropShadowEffect
+            {
+                Color = accent,
+                BlurRadius = 14,
+                ShadowDepth = 1,
+                Opacity = 0.6
+            };
+            var labelScale = new ScaleTransform(0.85, 0.85);
             var label = new TextBlock
             {
                 Text = node.Text,
                 FontFamily = new System.Windows.Media.FontFamily("Segoe UI Variable Display, Segoe UI"),
-                FontSize = Math.Max(7.0, fontSize),
-                FontWeight = isActive ? FontWeights.Bold : FontWeights.Medium,
-                Foreground = new SolidColorBrush(isActive
-                    ? accent
-                    : System.Windows.Media.Color.FromArgb(196, 255, 255, 255)),
-                Effect = new DropShadowEffect
-                {
-                    Color = isActive ? accent : Colors.Black,
-                    BlurRadius = isActive ? 14 : 5,
-                    ShadowDepth = 1,
-                    Opacity = isActive ? 0.6 : 0.7
-                }
+                FontSize = Math.Max(7.0, activeFontSize),
+                FontWeight = FontWeights.Bold,
+                Foreground = labelBrush,
+                Effect = labelShadow,
+                RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+                RenderTransform = labelScale,
+                Opacity = 0.0
             };
 
             label.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
-            double labelOffsetY = (isActive ? ConstellationLayout.ActiveLabelOffsetY : ConstellationLayout.InactiveLabelOffsetY) * previewScale;
-            Canvas.SetLeft(label, cx - label.DesiredSize.Width / 2.0);
-            Canvas.SetTop(label, cy + labelOffsetY - label.DesiredSize.Height / 2.0);
+            double halfW = label.DesiredSize.Width / 2.0;
+            double halfH = label.DesiredSize.Height / 2.0;
+            double activeOffsetY = ConstellationLayout.ActiveLabelOffsetY * previewScale;
+            double inactiveOffsetY = ConstellationLayout.InactiveLabelOffsetY * previewScale;
+
+            Canvas.SetLeft(label, cx - halfW);
+            Canvas.SetTop(label, cy + activeOffsetY - halfH);
             StarsCanvas.Children.Add(label);
+
+            _nodeVisuals.Add(new NodeVisual
+            {
+                Node = node,
+                CenterX = cx,
+                CenterY = cy,
+                PrevX = prevX,
+                PrevY = prevY,
+                InactiveScale = inactiveScale,
+                LabelHalfHeight = halfH,
+                ActiveOffsetY = activeOffsetY,
+                InactiveOffsetY = inactiveOffsetY,
+                IncomingLine = lines[i].Line,
+                LineBrush = lines[i].Brush,
+                Star = star,
+                StarScale = starScale,
+                HaloRing = halo,
+                HaloScale = haloScale,
+                Label = label,
+                LabelScale = labelScale,
+                LabelBrush = labelBrush,
+                LabelShadow = labelShadow
+            });
         }
     }
+
+    private void AnimateConstellation(LyricLine line, double now)
+    {
+        // Smooth fade-out during the final 300ms of the lyric line
+        double remaining = line.EndTime - now;
+        double lineOpacity = remaining < LineFadeOutDuration
+            ? EaseOutCubic(Math.Clamp(remaining / LineFadeOutDuration, 0.0, 1.0))
+            : 1.0;
+        StarsCanvas.Opacity = lineOpacity;
+
+        var accent = ToWpfColor(_palette.Accent);
+        int count = _nodeVisuals.Count;
+
+        for (int i = 0; i < count; i++)
+        {
+            var nv = _nodeVisuals[i];
+            // First word always begins fading in right as the line starts
+            double start = i == 0 ? Math.Min(nv.Node.StartTime, line.StartTime) : nv.Node.StartTime;
+            double rawReveal = Math.Clamp((now - start) / WordRevealDuration, 0.0, 1.0);
+            if (rawReveal <= 0.001)
+            {
+                if (nv.IncomingLine is not null) nv.IncomingLine.Opacity = 0.0;
+                nv.Star.Opacity = 0.0;
+                nv.HaloRing.Opacity = 0.0;
+                nv.Label.Opacity = 0.0;
+                continue;
+            }
+
+            double reveal = EaseOutCubic(rawReveal);
+
+            // Smoothly transition from active -> settled once the next word starts
+            double nextStart = (i + 1 < count) ? _nodeVisuals[i + 1].Node.StartTime : double.PositiveInfinity;
+            double settle = double.IsInfinity(nextStart)
+                ? 0.0
+                : EaseOutCubic(Math.Clamp((now - nextStart) / WordSettleDuration, 0.0, 1.0));
+            double activeWeight = 1.0 - settle;
+
+            // 1. Connecting line draws smoothly from previous star to current star
+            if (nv.IncomingLine is not null)
+            {
+                nv.IncomingLine.X2 = Lerp(nv.PrevX, nv.CenterX, reveal);
+                nv.IncomingLine.Y2 = Lerp(nv.PrevY, nv.CenterY, reveal);
+                nv.IncomingLine.Opacity = reveal * Lerp(0.36, 0.68, activeWeight);
+            }
+
+            // 2. 4-point star scales in softly and relaxes to subtle size when settled
+            double starScaleVal = Lerp(0.46, 1.0, activeWeight) * Lerp(0.55, 1.0, reveal);
+            nv.StarScale.ScaleX = starScaleVal;
+            nv.StarScale.ScaleY = starScaleVal;
+            nv.Star.Opacity = reveal * Lerp(0.72, 0.98, activeWeight);
+
+            // 3. Target halo ring blooms in while active and fades smoothly when moving on
+            double haloScaleVal = Lerp(0.75, 1.0, reveal) * Lerp(1.18, 1.0, activeWeight);
+            nv.HaloScale.ScaleX = haloScaleVal;
+            nv.HaloScale.ScaleY = haloScaleVal;
+            nv.HaloRing.Opacity = reveal * activeWeight * 0.68;
+
+            // 4. Word fades in, scales up smoothly, and settles into readable white
+            double targetLabelScale = Lerp(nv.InactiveScale, 1.0, activeWeight);
+            double currentLabelScale = targetLabelScale * Lerp(0.86, 1.0, reveal);
+            nv.LabelScale.ScaleX = currentLabelScale;
+            nv.LabelScale.ScaleY = currentLabelScale;
+            nv.Label.Opacity = reveal * Lerp(0.76, 1.0, activeWeight);
+
+            nv.LabelBrush.Color = LerpColor(
+                System.Windows.Media.Color.FromRgb(255, 255, 255),
+                accent,
+                activeWeight);
+            nv.LabelShadow.Opacity = Lerp(0.45, 0.62, activeWeight);
+            nv.LabelShadow.BlurRadius = Lerp(5.0, 14.0, activeWeight);
+
+            double yOffset = Lerp(nv.InactiveOffsetY, nv.ActiveOffsetY, activeWeight);
+            Canvas.SetTop(nv.Label, nv.CenterY + yOffset - nv.LabelHalfHeight);
+        }
+    }
+
+    private static double EaseOutCubic(double t)
+    {
+        double inv = 1.0 - t;
+        return 1.0 - inv * inv * inv;
+    }
+
+    private static double Lerp(double a, double b, double t) => a + (b - a) * t;
+
+    private static System.Windows.Media.Color LerpColor(System.Windows.Media.Color a, System.Windows.Media.Color b, double t) =>
+        System.Windows.Media.Color.FromRgb(
+            (byte)Math.Round(Lerp(a.R, b.R, t)),
+            (byte)Math.Round(Lerp(a.G, b.G, t)),
+            (byte)Math.Round(Lerp(a.B, b.B, t)));
 
     private static Polygon BuildFourPointStar(double cx, double cy, double outerR, double innerR)
     {
