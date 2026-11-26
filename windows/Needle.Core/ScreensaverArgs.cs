@@ -4,22 +4,30 @@ public enum ScreensaverMode
 {
     FullScreen,
     Preview,
-    Configure
+    Configure,
+    Tray
 }
 
 public sealed record ScreensaverCommand(ScreensaverMode Mode, nint PreviewHandle = 0);
 
 public static class ScreensaverArgs
 {
-    public static ScreensaverCommand Parse(string[] args)
+    public static ScreensaverCommand Parse(string[] args, string? executablePath = null)
     {
         if (args.Length == 0)
         {
-            return new ScreensaverCommand(ScreensaverMode.FullScreen);
+            bool isScr = executablePath is not null &&
+                         executablePath.EndsWith(".scr", StringComparison.OrdinalIgnoreCase);
+            return new ScreensaverCommand(isScr ? ScreensaverMode.FullScreen : ScreensaverMode.Tray);
         }
 
         string first = args[0].Trim().ToLowerInvariant();
         string? second = args.Length > 1 ? args[1].Trim() : null;
+
+        if (first is "--tray" or "/tray" or "-tray")
+        {
+            return new ScreensaverCommand(ScreensaverMode.Tray);
+        }
 
         if (first.StartsWith("/c", StringComparison.Ordinal) || first.StartsWith("-c", StringComparison.Ordinal))
         {

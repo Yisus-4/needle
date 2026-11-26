@@ -34,9 +34,15 @@ open /Applications/Needle.app
 
 ### Windows 10 / 11 (PowerShell + .NET 8 SDK)
 ```powershell
-# Ejecuta tests xUnit y genera windows\dist\Needle.scr (autocontenido, 64-bit)
+# Ejecuta tests xUnit y genera windows\dist\Needle.exe y windows\dist\Needle.scr
 .\windows\build-windows.ps1
 ```
 
-1. Haz clic derecho sobre `windows\dist\Needle.scr` → **Instalar**.
-2. En la ventana de **Configuración del protector de pantalla** que abre Windows, marca **"Mostrar la pantalla de inicio de sesión al reanudar"** y elige el tiempo de espera.
+#### Modo recomendado: bandeja del sistema (`Needle.exe`)
+1. Abre `windows\dist\Needle.exe` (aparece un ícono `✨` en la bandeja del sistema junto al reloj).
+2. Presiona **`Ctrl + Alt + L`** para mostrar Needle a pantalla completa con las constelaciones *Stars*; en cuanto mueves el mouse o tocas una tecla, Windows bloquea tu sesión de inmediato (`LockWorkStation`) y te pide tu **PIN / contraseña / Windows Hello**.
+3. Haz **doble clic** en el ícono `✨` (o clic derecho → **Vista previa**) para previsualizar en 1 clic sin bloquear la PC.
+4. *(Opcional)* Para que arranque solo con Windows, presiona `Win + R`, escribe `shell:startup` y pega ahí un acceso directo a `Needle.exe`.
+
+#### Modo alternativo: salvapantallas clásico (`Needle.scr`)
+- Clic derecho sobre `windows\dist\Needle.scr` → **Instalar** y marca *"Mostrar la pantalla de inicio de sesión al reanudar"*.

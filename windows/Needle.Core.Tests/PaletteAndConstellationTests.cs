@@ -61,7 +61,10 @@ public sealed class PaletteAndConstellationTests
     [Fact]
     public void ScreensaverArgsParsesAllWindowsModes()
     {
-        Assert.Equal(ScreensaverMode.FullScreen, ScreensaverArgs.Parse([]).Mode);
+        Assert.Equal(ScreensaverMode.Tray, ScreensaverArgs.Parse([], "Needle.exe").Mode);
+        Assert.Equal(ScreensaverMode.Tray, ScreensaverArgs.Parse([]).Mode);
+        Assert.Equal(ScreensaverMode.Tray, ScreensaverArgs.Parse(["--tray"]).Mode);
+        Assert.Equal(ScreensaverMode.FullScreen, ScreensaverArgs.Parse([], "Needle.scr").Mode);
         Assert.Equal(ScreensaverMode.FullScreen, ScreensaverArgs.Parse(["/s"]).Mode);
         Assert.Equal(ScreensaverMode.Configure, ScreensaverArgs.Parse(["/c"]).Mode);
         Assert.Equal(ScreensaverMode.Configure, ScreensaverArgs.Parse(["/c:12345"]).Mode);

@@ -4,7 +4,9 @@ using System.Windows.Threading;
 using Needle.Core;
 using Needle.Core.Lyrics;
 using Needle.Core.Models;
+using Needle.Screensaver.Native;
 using Needle.Screensaver.Player;
+using Needle.Screensaver.SystemTray;
 using Needle.Screensaver.UI;
 
 namespace Needle.Screensaver;
@@ -16,6 +18,8 @@ public partial class App : System.Windows.Application
     private readonly List<ConstellationWindow> _windows = [];
     private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
 
+    private Mutex? _singleInstanceMutex;
+    private TrayController? _tray;
     private CancellationTokenSource? _trackCts;
     private string? _loadedTrackId;
     private PlaybackSnapshot? _latestSnapshot;
@@ -23,16 +27,25 @@ public partial class App : System.Windows.Application
     private AlbumPalette _currentPalette = AlbumPalette.Fallback;
     private BitmapImage? _currentArtwork;
     private long _refreshGeneration;
+    private bool _spotifyInitialized;
+    private bool _isTrayMode;
+    private bool _lockOnOverlayExit;
     private bool _isExiting;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        var command = ScreensaverArgs.Parse(e.Args);
+        _pollTimer.Tick += async (_, _) => await RefreshPlaybackAsync();
+
+        var command = ScreensaverArgs.Parse(e.Args, Environment.ProcessPath);
 
         switch (command.Mode)
         {
+            case ScreensaverMode.Tray:
+                await StartTrayModeAsync();
+                return;
+
             case ScreensaverMode.Configure:
                 ShowConfigWindow();
                 return;
@@ -43,14 +56,33 @@ public partial class App : System.Windows.Application
                     Shutdown();
                     return;
                 }
-                await StartScreensaverAsync(previewHandle: command.PreviewHandle);
+                await ShowOverlayAsync(previewHandle: command.PreviewHandle, lockOnExit: false);
                 return;
 
             case ScreensaverMode.FullScreen:
             default:
-                await StartScreensaverAsync(previewHandle: 0);
+                await ShowOverlayAsync(previewHandle: 0, lockOnExit: false);
                 return;
         }
+    }
+
+    private async Task StartTrayModeAsync()
+    {
+        _singleInstanceMutex = new Mutex(initiallyOwned: true, "Local\\NeedleWindowsTrayMutex", out bool createdNew);
+        if (!createdNew)
+        {
+            Shutdown();
+            return;
+        }
+
+        _isTrayMode = true;
+        _tray = new TrayController();
+        _tray.LockWithNeedleRequested += () => _ = ShowOverlayAsync(previewHandle: 0, lockOnExit: true);
+        _tray.PreviewRequested += () => _ = ShowOverlayAsync(previewHandle: 0, lockOnExit: false);
+        _tray.ExitRequested += QuitApp;
+
+        await EnsureSpotifyInitializedAsync();
+        await RefreshPlaybackAsync();
     }
 
     private void ShowConfigWindow()
@@ -59,21 +91,26 @@ public partial class App : System.Windows.Application
         config.PreviewRequested += async () =>
         {
             config.Hide();
-            await StartScreensaverAsync(previewHandle: 0);
+            await ShowOverlayAsync(previewHandle: 0, lockOnExit: false);
         };
         config.Closed += (_, _) =>
         {
-            if (_windows.Count == 0 && !_isExiting) Shutdown();
+            if (_windows.Count == 0 && !_isExiting && !_isTrayMode) Shutdown();
         };
         config.Show();
     }
 
-    private async Task StartScreensaverAsync(nint previewHandle)
+    private async Task ShowOverlayAsync(nint previewHandle, bool lockOnExit)
     {
+        if (_isExiting) return;
+        if (_windows.Count > 0) return; // Already showing overlay
+
+        _lockOnOverlayExit = lockOnExit;
+
         if (previewHandle != 0)
         {
             var previewWin = new ConstellationWindow(exitOnInput: false, previewParentHwnd: previewHandle);
-            previewWin.Closed += (_, _) => ExitAll();
+            previewWin.Closed += (_, _) => DismissOverlay();
             _windows.Add(previewWin);
             previewWin.Show();
         }
@@ -84,20 +121,27 @@ public partial class App : System.Windows.Application
                 var win = new ConstellationWindow(exitOnInput: true, targetPhysicalBounds: screen.Bounds);
                 win.WindowStartupLocation = WindowStartupLocation.Manual;
                 win.WindowState = WindowState.Normal;
-                win.ExitRequested += ExitAll;
+                win.ExitRequested += DismissOverlay;
                 _windows.Add(win);
                 win.Show();
+                win.Activate();
             }
         }
 
+        await EnsureSpotifyInitializedAsync();
+        if (_isExiting || _windows.Count == 0) return;
+
+        _pollTimer.Start();
+        await RefreshPlaybackAsync();
+    }
+
+    private async Task EnsureSpotifyInitializedAsync()
+    {
+        if (_spotifyInitialized || _isExiting) return;
+        _spotifyInitialized = true;
         await _spotify.InitializeAsync();
         if (_isExiting) return;
-
         _spotify.PlaybackChanged += () => Dispatcher.InvokeAsync(async () => await RefreshPlaybackAsync());
-        _pollTimer.Tick += async (_, _) => await RefreshPlaybackAsync();
-        _pollTimer.Start();
-
-        await RefreshPlaybackAsync();
     }
 
     private async Task RefreshPlaybackAsync()
@@ -108,6 +152,16 @@ public partial class App : System.Windows.Application
         if (_isExiting || gen != Interlocked.Read(ref _refreshGeneration)) return;
 
         _latestSnapshot = snapshot;
+
+        if (snapshot.Track is not null)
+        {
+            string stateLabel = snapshot.State == PlaybackState.Playing ? "Reproduciendo" : "En pausa";
+            _tray?.UpdateStatus($"Spotify: {stateLabel} — {snapshot.Track.Name}");
+        }
+        else
+        {
+            _tray?.UpdateStatus("Spotify: detenido");
+        }
 
         if (snapshot.Track is not null && snapshot.Track.Id != _loadedTrackId)
         {
@@ -164,19 +218,52 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void ExitAll()
+    private void DismissOverlay()
+    {
+        if (_windows.Count == 0 && !_isTrayMode)
+        {
+            QuitApp();
+            return;
+        }
+
+        bool shouldLock = _lockOnOverlayExit;
+        _lockOnOverlayExit = false;
+        _pollTimer.Stop();
+
+        // Trigger Windows Secure Desktop lock BEFORE closing overlay so desktop never flashes unlocked
+        if (shouldLock)
+        {
+            NativeMethods.LockWorkStation();
+        }
+
+        var openWindows = _windows.ToList();
+        _windows.Clear();
+        foreach (var win in openWindows)
+        {
+            win.Close();
+        }
+
+        if (!_isTrayMode)
+        {
+            QuitApp();
+        }
+    }
+
+    private void QuitApp()
     {
         if (_isExiting) return;
         _isExiting = true;
         _pollTimer.Stop();
         _trackCts?.Cancel();
         _trackCts?.Dispose();
+        _tray?.Dispose();
         _spotify.Dispose();
         foreach (var win in _windows.ToList())
         {
             win.Close();
         }
         _windows.Clear();
+        _singleInstanceMutex?.Dispose();
         Shutdown();
     }
 
@@ -186,7 +273,9 @@ public partial class App : System.Windows.Application
         _pollTimer.Stop();
         _trackCts?.Cancel();
         _trackCts?.Dispose();
+        _tray?.Dispose();
         _spotify.Dispose();
+        _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }
 }

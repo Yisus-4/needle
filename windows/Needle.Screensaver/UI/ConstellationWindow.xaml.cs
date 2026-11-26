@@ -83,8 +83,8 @@ public partial class ConstellationWindow : Window
         if (_exitOnInput)
         {
             Cursor = System.Windows.Input.Cursors.None;
-            KeyDown += (_, _) => RequestExit();
-            MouseDown += (_, _) => RequestExit();
+            KeyDown += (_, _) => RequestExitWithGrace();
+            MouseDown += (_, _) => RequestExitWithGrace();
             MouseMove += OnScreensaverMouseMove;
         }
 
@@ -153,6 +153,13 @@ public partial class ConstellationWindow : Window
         {
             RequestExit();
         }
+    }
+
+    private void RequestExitWithGrace()
+    {
+        // Ignore held/repeated keys from the Ctrl+Alt+L launch hotkey during the first 450ms
+        if ((DateTime.UtcNow - _openedAt).TotalMilliseconds < 450) return;
+        RequestExit();
     }
 
     private void RequestExit()
