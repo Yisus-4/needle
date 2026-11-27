@@ -33,10 +33,44 @@ open /Applications/Needle.app
   `CODESIGN_IDENTITY="Needle Local" ./scripts/build-app.sh`
 
 ### Windows 10 / 11 (PowerShell + .NET 8 SDK)
+
+#### Requisitos previos
+Para compilar Needle en Windows es necesario tener instalado el **SDK de .NET 8** (ojo: tener solo el Runtime de .NET no es suficiente, se requiere el SDK completo para compilar).
+
+Puedes comprobar si lo tienes instalado ejecutando:
+```powershell
+dotnet --version
+```
+
+- Si muestra `8.0.xxx`, ya cuentas con el SDK.
+- Si muestra `No .NET SDKs were found` o no reconoce el comando `dotnet`, instálalo con cualquiera de estas opciones:
+  - **winget** (recomendado):
+    ```powershell
+    winget install Microsoft.DotNet.SDK.8
+    ```
+  - **Chocolatey**:
+    ```powershell
+    choco install dotnet-8.0-sdk
+    ```
+  - **Instalador oficial**: Descarga el instalador x64 desde [Microsoft .NET 8.0](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+*(Importante: tras instalarlo, cierra y vuelve a abrir PowerShell para que tome las nuevas variables de entorno).*
+
+#### Compilar
 ```powershell
 # Ejecuta tests xUnit y genera windows\dist\Needle.exe y windows\dist\Needle.scr
 .\windows\build-windows.ps1
 ```
+
+> **¿Error al ejecutar el script? (`PSSecurityException` / scripts deshabilitados)**  
+> Si PowerShell bloquea la ejecución del `.ps1` por la política de seguridad del sistema, puedes habilitarla para tu usuario ejecutando:
+> ```powershell
+> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+> ```
+> O ejecutar el script saltando la política temporalmente:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\windows\build-windows.ps1
+> ```
 
 #### Modo recomendado: bandeja del sistema (`Needle.exe`)
 1. Abre `windows\dist\Needle.exe` (aparece un ícono `✨` en la bandeja del sistema junto al reloj).
